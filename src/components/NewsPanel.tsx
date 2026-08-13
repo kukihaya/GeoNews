@@ -22,8 +22,8 @@ export default function NewsPanel({ event, onClose }: NewsPanelProps) {
   const categoryColor = CATEGORY_COLORS[event.category];
 
   return (
-    <div className="news-panel-overlay" onClick={onClose}>
-      <div className="news-panel" onClick={(e) => e.stopPropagation()}>
+    <div className="news-panel-overlay">
+      <div className="news-panel">
         <button className="panel-close" onClick={onClose}>
           ×
         </button>
