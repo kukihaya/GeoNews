@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { NewsEvent } from "../types";
 import { CATEGORY_COLORS } from "../types";
 import { sampleEvents } from "../data/events";
 import NewsPanel from "./NewsPanel";
+import SearchBar from "./SearchBar";
 
 interface MarkerEntry {
   marker: maplibregl.Marker;
@@ -16,8 +17,61 @@ export default function WorldMap() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<MarkerEntry[]>([]);
+  const searchFilterRef = useRef<Set<string> | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<NewsEvent | null>(null);
   const [zoomLevel, setZoomLevel] = useState(2);
+
+  const applyVisibility = useCallback(() => {
+    if (!map.current) return;
+    const zoom = map.current.getZoom();
+    const threshold = zoom < 3 ? 85 : zoom < 5 ? 70 : zoom < 7 ? 50 : 0;
+    const size = zoom < 3 ? "small" : zoom < 6 ? "medium" : "large";
+    const showLabels = zoom >= 4;
+    const filter = searchFilterRef.current;
+
+    for (const entry of markersRef.current) {
+      const { element, event } = entry;
+
+      const passesImportance = event.importance >= threshold;
+      const passesSearch = filter === null || filter.has(event.id);
+      const visible = passesImportance && passesSearch;
+
+      element.style.display = visible ? "" : "none";
+
+      if (filter && filter.has(event.id)) {
+        element.classList.add("marker-highlighted");
+      } else {
+        element.classList.remove("marker-highlighted");
+      }
+
+      element.classList.remove("marker-small", "marker-medium", "marker-large");
+      element.classList.add(`marker-${size}`);
+
+      const label = element.querySelector(".marker-label") as HTMLElement;
+      if (label) {
+        label.style.display = showLabels ? "" : "none";
+      }
+    }
+  }, []);
+
+  const handleSearchFilter = useCallback(
+    (matchedIds: Set<string> | null) => {
+      searchFilterRef.current = matchedIds;
+      applyVisibility();
+    },
+    [applyVisibility]
+  );
+
+  const handleSearchSelect = useCallback((event: NewsEvent) => {
+    setSelectedEvent(event);
+    if (map.current) {
+      map.current.flyTo({
+        center: [event.longitude, event.latitude],
+        zoom: 6,
+        duration: 1500,
+      });
+    }
+  }, []);
 
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
@@ -58,7 +112,6 @@ export default function WorldMap() {
     map.current.addControl(new maplibregl.NavigationControl(), "top-right");
 
     map.current.on("load", () => {
-      // Create ALL markers once — never destroy them
       for (const event of sampleEvents) {
         const el = createMarkerElement(event);
         el.addEventListener("click", (e) => {
@@ -75,49 +128,28 @@ export default function WorldMap() {
         markersRef.current.push({ marker, element: el, event });
       }
 
-      // Apply initial zoom-based styles
-      updateMarkerStyles(map.current!.getZoom());
+      applyVisibility();
     });
 
     map.current.on("zoom", () => {
       const zoom = map.current!.getZoom();
       setZoomLevel(Math.round(zoom * 10) / 10);
-      updateMarkerStyles(zoom);
+      applyVisibility();
     });
-
-    function updateMarkerStyles(zoom: number) {
-      const threshold = zoom < 3 ? 85 : zoom < 5 ? 70 : zoom < 7 ? 50 : 0;
-      const size = zoom < 3 ? "small" : zoom < 6 ? "medium" : "large";
-      const showLabels = zoom >= 4;
-
-      for (const entry of markersRef.current) {
-        const { element, event } = entry;
-
-        // Show/hide based on importance threshold
-        const visible = event.importance >= threshold;
-        element.style.display = visible ? "" : "none";
-
-        // Update size class (without removing/recreating)
-        element.classList.remove("marker-small", "marker-medium", "marker-large");
-        element.classList.add(`marker-${size}`);
-
-        // Show/hide label
-        const label = element.querySelector(".marker-label") as HTMLElement;
-        if (label) {
-          label.style.display = showLabels ? "" : "none";
-        }
-      }
-    }
 
     return () => {
       map.current?.remove();
       map.current = null;
       markersRef.current = [];
     };
-  }, []);
+  }, [applyVisibility]);
 
   return (
     <div className="app-container">
+      <SearchBar
+        onSelectEvent={handleSearchSelect}
+        onFilterChange={handleSearchFilter}
+      />
       <header className="app-header">
         <h1 className="app-title">GeoNews</h1>
         <div className="zoom-indicator">
@@ -139,8 +171,6 @@ export default function WorldMap() {
 function createMarkerElement(event: NewsEvent): HTMLElement {
   const color = CATEGORY_COLORS[event.category];
 
-  // Fixed-size wrapper — this is what MapLibre anchors to.
-  // Its size must NEVER change so the anchor point stays constant.
   const container = document.createElement("div");
   container.className = "news-marker marker-small";
 
